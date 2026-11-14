@@ -1,0 +1,13 @@
+*.exe
+*.zip
+*.pdb
+*.log
+/config.json*
+/last-report.json
+/test-data/
+/DriverRepair/
+/asus-support.html
+/asus-drivers.json
+/gpu-*-result.txt
+/gpu-cycle-*.txt
+/startup-*.txt
