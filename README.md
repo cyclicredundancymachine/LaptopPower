@@ -68,3 +68,7 @@ See [AGENTS.md](AGENTS.md) for maintenance instructions.
 ## Release packaging
 
 Run `Build-Release.ps1 -IsccPath 'C:\path\to\ISCC.exe'` using Windows PowerShell 5.1 and Inno Setup 7. The script builds the app, runs both required test suites, and creates Setup, portable ZIP and SHA256SUMS.txt in the ignored artifacts folder. VERSION supplies the release version. See RELEASE_NOTES.md for changes and test coverage.
+
+## License
+
+The original application code is MIT licensed; see [LICENSE](LICENSE).

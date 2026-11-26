@@ -11,3 +11,5 @@ Verified: build, embedded-backend verification, tray-click checks, GPU retry/can
 Known issues: NVIDIA Code 43 can recur after switching; brightness can remain physically unresponsive despite WMI readback; charge-limit threshold readback and startup/resume persistence are unavailable. AC/battery timeouts are independent. See README.md and README.txt. ASUS controls remain model-dependent. Installers are not code-signed.
 
 Installer verification on November 27, 2026: clean install, same-version upgrade and uninstall passed; installed payload hashes matched the build, and uninstall preserved unrelated source files. In-place upgrade into the existing app folder passed, installed Help matched source, and user configuration/restore records were unchanged. Both updated tray apps restarted successfully. AudioSwitch retained read-only inspection; Laptop Power's embedded-resource verifier passed.
+
+The original application is now MIT licensed. LICENSE is included in Setup and the portable ZIP; existing third-party notices are retained.

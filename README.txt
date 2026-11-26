@@ -71,3 +71,6 @@ even when WMI reports a change. Charge-limit requests are not reapplied at start
 or resume; the firmware threshold cannot be read back. Charge above 80% after
 wake remains unexplained. AC and battery timeouts are independent: -1 keeps the
 Windows value, 0 means Never. Installation does not replace your configuration.
+
+LICENSE
+The application is MIT licensed. Keep LICENSE with redistributed copies.

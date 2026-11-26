@@ -41,6 +41,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 [Files]
 Source: "{#PayloadDir}\LaptopPower.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\README.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Laptop Power"; Filename: "{app}\LaptopPower.exe"

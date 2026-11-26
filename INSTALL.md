@@ -13,3 +13,6 @@ The portable ZIP remains available and contains the same application files as Se
 ## Building Setup
 
 Install [Inno Setup 7](https://jrsoftware.org/inno-setup/downloads). Run `Build-Release.ps1 -IsccPath 'C:\path\to\ISCC.exe'` from Windows PowerShell 5.1. The Windows .NET Framework compiler builds the x64 application and its embedded backend. Output is written to the ignored `artifacts` folder: a versioned Setup EXE, a portable ZIP and SHA256SUMS.txt. VERSION supplies the release version.
+
+
+Both Setup and portable downloads include the application MIT license. AudioSwitch also includes its separate third-party MIT notice.
