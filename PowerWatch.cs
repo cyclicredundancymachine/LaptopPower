@@ -25,7 +25,7 @@ internal sealed class PowerWatch : IDisposable {
     static extern IntPtr LocalFree(IntPtr memory);
 
     enum Source { Unknown, Battery, External, ExternalWithDrain }
-    enum PromptKind { Battery, BatteryNotice, Usb, Asus, AsusNotice, Drain }
+    enum PromptKind { Battery, BatteryNotice, Usb, UsbNotice, Asus, AsusNotice, Drain }
     readonly PowerWindow window;
     readonly NotifyIcon tray;
     internal string StatusText { get; private set; }
@@ -36,6 +36,8 @@ internal sealed class PowerWatch : IDisposable {
     string gpuStatus = "Unconfirmed";
     string gpuContext, attemptedPolicy, overrideContext;
     bool gpuBusy;
+    internal string GpuStatus { get { return gpuStatus; } }
+    internal bool CanOverrideGpu { get { return !gpuBusy && !window.IsBusy && gpuStatus != "Unavailable"; } }
     Task gpuOperation = Task.FromResult(0);
     string gpuFailure;
     bool disposed;
@@ -129,7 +131,8 @@ internal sealed class PowerWatch : IDisposable {
     }
 
     int CurrentSupply() {
-        return SystemInformation.PowerStatus.PowerLineStatus == PowerLineStatus.Offline ? 3 : chargerType;
+        var line = SystemInformation.PowerStatus.PowerLineStatus;
+        return line == PowerLineStatus.Offline ? 3 : line == PowerLineStatus.Online ? chargerType : 0;
     }
 
     bool MatchesContext(int mode, int supply, LaptopAsus asus) {
@@ -199,28 +202,27 @@ internal sealed class PowerWatch : IDisposable {
         } catch (Exception ex) { gpuStatus = "Unconfirmed"; gpuFailure = ex.Message; }
     }
 
-    internal SettingResult[] GpuRows(int mode) {
-        var rows = new List<SettingResult>();
+    internal SettingResult CurrentGpuRow() {
         string[] sources = { "ASUS charger", "USB-C", "battery" };
         int supply = CurrentSupply();
-        string ignored;
-        bool active = mode >= 0 && ActiveMode(out ignored) == mode;
-        for (int source = 1; source <= 3; source++) {
-            int target = window.GpuPreference(mode,source);
-            bool current = active && supply == source;
-            string desired = target == 0 ? "Keep current" : target == 1 ? "On" : "Off";
-            string result = !current ? "Not active" : gpuBusy ? "Pending" : gpuStatus.StartsWith("Driver error",StringComparison.Ordinal) ? "Failed" : target == 0 ? "Observed" :
-                gpuFailure != null ? "Failed" :
-                overrideContext != null && overrideContext == gpuContext ? "Override" : gpuStatus == desired ? "Verified" :
-                gpuStatus == "On" || gpuStatus == "Off" ? "Mismatch" : "Unconfirmed";
-            rows.Add(new SettingResult { setting = "NVIDIA GPU - " + sources[source-1], requested = desired,
-                actual = current ? gpuStatus : "Other power source", status = result,
-                detail = current ? (gpuStatus.StartsWith("Driver error",StringComparison.Ordinal) ? "Windows reports " + gpuStatus + ". The firmware setting alone does not establish that the GPU is working." :
-                    result == "Verified" ? "NVIDIA matches the saved rule for the current power source." : gpuFailure) ?? (result == "Override" ? "A temporary NVIDIA override is active. Verify & fix returns to the saved profile." :
-                    "GPU state uses ASUS firmware and Windows device presence. Inactive-source rules are displayed without switching power sources.") :
-                    "This saved rule is used when its power source and mode are active." });
+        if (supply < 1 || supply > sources.Length) {
+            return new SettingResult { setting = "NVIDIA GPU - power source unknown", requested = "Unavailable",
+                actual = gpuStatus, status = "Source unknown",
+                detail = "Laptop Power could not identify the current power source or its NVIDIA rule." };
         }
-        return rows.ToArray();
+        string title;
+        int mode = ActiveMode(out title);
+        int target = window.GpuPreference(mode, supply);
+        string desired = mode < 0 ? "No Laptop Power rule" : target == 0 ? "Keep current" : target == 1 ? "On" : "Off";
+        bool driverError = gpuStatus.StartsWith("Driver error", StringComparison.Ordinal);
+        string result = gpuBusy ? "Pending" : driverError || gpuFailure != null ? "Failed" :
+            overrideContext == mode + ":" + supply ? "Override" : target == 0 ? "Observed" :
+            gpuStatus == desired ? "Verified" : gpuStatus == "On" || gpuStatus == "Off" ? "Mismatch" : "Unconfirmed";
+        string detail = driverError ? "Windows reports " + gpuStatus + "." : gpuFailure;
+        if (detail == null) detail = result == "Override" ? "A temporary NVIDIA override is active. Verify & fix returns to the saved profile." :
+            "GPU state uses ASUS firmware and Windows device presence.";
+        return new SettingResult { setting = "NVIDIA GPU - " + sources[supply-1], requested = desired,
+            actual = gpuStatus, status = result, detail = detail };
     }
 
     internal int ActiveMode(out string title) {
@@ -285,6 +287,7 @@ internal sealed class PowerWatch : IDisposable {
         int sourceCode = source == Source.Battery ? 3 : chargerType == 1 || chargerType == 2 ? chargerType : 0;
         if (sourceCode != 0) {
             if (sourceCode != previousSupply) {
+                AppLauncher.Log("Power source changed: " + previousSupply + " -> " + sourceCode);
                 usbPromptPending = sourceCode == 2 && previousSupply != 0;
                 asusPromptPending = sourceCode == 1 && previousSupply != 0;
                 previousSupply = sourceCode;
@@ -323,10 +326,8 @@ internal sealed class PowerWatch : IDisposable {
         if (justUnplugged) ShowPrompt(mode == 0 || window.IsBusy ? PromptKind.BatteryNotice : PromptKind.Battery, mode);
         if (usbPromptPending && sourceCode == 2 && !window.IsBusy) {
             usbPromptPending = false;
-            if (mode != 0) {
-                ClosePrompt();
-                ShowPrompt(PromptKind.Usb, mode);
-            }
+            ClosePrompt();
+            ShowPrompt(UsbPromptForMode(mode), mode);
         }
         if (asusPromptPending && sourceCode == 1 && !window.IsBusy) {
             asusPromptPending = false;
@@ -347,13 +348,15 @@ internal sealed class PowerWatch : IDisposable {
     }
 
     static bool IsCountdown(PromptKind kind) { return kind == PromptKind.Battery || kind == PromptKind.Usb || kind == PromptKind.Asus; }
+    static PromptKind UsbPromptForMode(int mode) { return mode == 0 ? PromptKind.UsbNotice : PromptKind.Usb; }
     static int TargetMode(PromptKind kind) { return kind == PromptKind.Asus || kind == PromptKind.AsusNotice ? 1 : 0; }
 
     bool MatchesPrompt(PromptKind kind, Source source) {
         switch (kind) {
             case PromptKind.Battery: return source == Source.Battery;
             case PromptKind.BatteryNotice: return source == Source.Battery;
-            case PromptKind.Usb: return chargerType == 2 && (source == Source.External || source == Source.ExternalWithDrain);
+            case PromptKind.Usb:
+            case PromptKind.UsbNotice: return chargerType == 2 && (source == Source.External || source == Source.ExternalWithDrain);
             case PromptKind.Asus:
             case PromptKind.AsusNotice: return chargerType == 1 && (source == Source.External || source == Source.ExternalWithDrain);
             default: return source == Source.ExternalWithDrain;
@@ -361,6 +364,7 @@ internal sealed class PowerWatch : IDisposable {
     }
 
     void ShowPrompt(PromptKind kind, int mode) {
+        AppLauncher.Log("Showing power popup: " + kind);
         promptKind = kind;
         bool pluggedIn = kind == PromptKind.Drain;
         if (IsCountdown(kind)) countdown.Restart();
@@ -394,6 +398,8 @@ internal sealed class PowerWatch : IDisposable {
             if (kind == PromptKind.BatteryNotice) {
                 message.Text = "External power disconnected. The laptop is now on battery.";
                 if (mode == 0) message.Text += "\n" + window.ModeName(0) + " is already active.";
+            } else if (kind == PromptKind.UsbNotice) {
+                message.Text = "USB-C power connected. This charger may supply less power.\n" + window.ModeName(0) + " is already active.";
             } else if (kind == PromptKind.AsusNotice) {
                 message.Text = "ASUS charger connected.\n" + window.ModeName(1) + " is already active.";
             } else actions.Controls.Add(apply);

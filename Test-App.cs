@@ -78,6 +78,13 @@ internal static class AppChecks {
         Type watcher=typeof(PowerWatch);
         Type kind=watcher.GetNestedType("PromptKind",BindingFlags.NonPublic);
         var target=watcher.GetMethod("TargetMode",BindingFlags.Static|BindingFlags.NonPublic);
+        var usbPrompt=watcher.GetMethod("UsbPromptForMode",BindingFlags.Static|BindingFlags.NonPublic);
+        var countdown=watcher.GetMethod("IsCountdown",BindingFlags.Static|BindingFlags.NonPublic);
+        var notice=usbPrompt.Invoke(null,new object[]{0});
+        Require(notice.ToString()=="UsbNotice" && !(bool)countdown.Invoke(null,new[]{notice}),
+            "USB-C in Endurance must show an informational notice");
+        foreach(int mode in new[]{-1,1,2})
+            Require(usbPrompt.Invoke(null,new object[]{mode}).ToString()=="Usb","USB-C must offer Endurance in other modes");
         foreach(string name in new[]{"Battery","Usb","Drain"})
             Require((int)target.Invoke(null,new[]{Enum.Parse(kind,name)})==0,"Endurance prompt target changed");
         Require((int)target.Invoke(null,new[]{Enum.Parse(kind,"Asus")})==1,"ASUS prompt must select Balanced");

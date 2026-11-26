@@ -9,8 +9,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Web.Script.Serialization;
-[assembly: AssemblyVersion("3.0.0.0")]
-[assembly: AssemblyFileVersion("3.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 internal static class AppLauncher {
     [DllImport("user32.dll")]
@@ -101,9 +101,42 @@ internal static class AppLauncher {
                     using (var clicks = new TrayClicks(tray, () => watch.StatusText, window.BringForward))
                     using (var activationTimer = new System.Windows.Forms.Timer { Interval = 125 }) {
                         menu.Items.Add("Open Laptop Power", null, delegate { window.BringForward(); });
-                        var gpu = new ToolStripMenuItem("NVIDIA GPU override");
-                        gpu.DropDownItems.Add("Turn on", null, async delegate { await watch.OverrideGpu(true); });
-                        gpu.DropDownItems.Add("Turn off", null, async delegate { await watch.OverrideGpu(false); });
+                        var modeMenu = new ToolStripMenuItem("Power mode");
+                        var modeItems = new ToolStripMenuItem[3];
+                        for (int i = 0; i < modeItems.Length; i++) {
+                            int index = i;
+                            modeItems[i] = new ToolStripMenuItem(window.ModeName(index));
+                            modeItems[i].Click += async delegate { await window.ApplyMode(index); };
+                            modeMenu.DropDownItems.Add(modeItems[i]);
+                        }
+                        menu.Items.Add(modeMenu);
+                        var chargeMenu = new ToolStripMenuItem("Battery charge limit");
+                        var limitOn = new ToolStripMenuItem("Enable 80% limit");
+                        var limitOff = new ToolStripMenuItem("Disable limit (100%)");
+                        limitOn.Click += async delegate {
+                            bool ok = await window.SetChargeLimit(80);
+                            tray.ShowBalloonTip(4000, "Laptop Power", ok ? "ASUS accepted the 80% limit." : "Could not set the charge limit. See the main window.", ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
+                        };
+                        limitOff.Click += async delegate {
+                            bool ok = await window.SetChargeLimit(100);
+                            tray.ShowBalloonTip(4000, "Laptop Power", ok ? "ASUS accepted the 100% limit." : "Could not set the charge limit. See the main window.", ok ? ToolTipIcon.Info : ToolTipIcon.Warning);
+                        };
+                        chargeMenu.DropDownItems.Add(limitOn);
+                        chargeMenu.DropDownItems.Add(limitOff);
+                        menu.Items.Add(chargeMenu);
+                        var gpu = new ToolStripMenuItem("NVIDIA GPU");
+                        var gpuOn = new ToolStripMenuItem("On");
+                        var gpuOff = new ToolStripMenuItem("Off");
+                        gpuOn.Click += async delegate { await watch.OverrideGpu(true); };
+                        gpuOff.Click += async delegate { await watch.OverrideGpu(false); };
+                        gpu.DropDownItems.Add(gpuOn);
+                        gpu.DropDownItems.Add(gpuOff);
+                        Action refreshGpuMenu = delegate {
+                            gpu.Enabled = watch.CanOverrideGpu;
+                            gpuOn.Checked = watch.GpuStatus == "On";
+                            gpuOff.Checked = watch.GpuStatus == "Off";
+                        };
+                        gpu.DropDownOpening += delegate { refreshGpuMenu(); };
                         menu.Items.Add(gpu);
                         menu.Items.Add("Help", null, delegate { OpenReadme(); });
                         menu.Items.Add(new ToolStripSeparator());
@@ -112,15 +145,34 @@ internal static class AppLauncher {
                             await watch.WaitForGpu();
                             window.ExitFromTray();
                         });
-                        menu.Opened += delegate { Log("Tray right-click menu opened."); };
-                        // Explorer's default placement can put the bottom entries behind an auto-hide taskbar.
-                        tray.MouseUp += delegate(object sender,MouseEventArgs e) {
-                            if(e.Button!=MouseButtons.Right)return;
-                            Point cursor=Cursor.Position;
-                            Size size=menu.GetPreferredSize(Size.Empty);
-                            menu.Show(TrayMenuPosition(cursor,Screen.FromPoint(cursor).WorkingArea,size));
+                        menu.Opening += delegate {
+                            refreshGpuMenu();
+                            string activeName;
+                            int active = watch.ActiveMode(out activeName);
+                            modeMenu.Enabled = !window.IsBusy;
+                            for (int i = 0; i < modeItems.Length; i++) {
+                                modeItems[i].Text = window.ModeName(i);
+                                modeItems[i].Checked = i == active;
+                            }
+                            chargeMenu.Enabled = window.ChargeLimitAvailable && !window.ChargeLimitBusy;
+                            limitOn.Checked = window.RequestedChargeLimit == 80;
+                            limitOff.Checked = window.RequestedChargeLimit == 100;
                         };
-                        activationTimer.Tick += delegate { if (activate.WaitOne(0)) window.BringForward(); };
+                        // Let NotifyIcon handle menu activation and dismissal. Move the
+                        // opened menu clear of the taskbar using its actual laid-out size.
+                        tray.ContextMenuStrip = menu;
+                        menu.Opened += delegate {
+                            Point cursor = Cursor.Position;
+                            menu.Location = TrayMenuPosition(cursor, Screen.FromPoint(cursor).WorkingArea, menu.Size);
+                            Log("Tray right-click menu opened.");
+                        };
+                        bool chargeProbeStarted = false;
+                        activationTimer.Tick += async delegate {
+                            if (activate.WaitOne(0)) window.BringForward();
+                            if (chargeProbeStarted) return;
+                            chargeProbeStarted = true;
+                            await window.CheckChargeLimit();
+                        };
                         tray.Visible = true;
                         activationTimer.Start();
                         if (Array.IndexOf(args, "--minimized") >= 0) {

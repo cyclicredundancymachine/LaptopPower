@@ -75,7 +75,7 @@ internal sealed class SettingsWindow : Form {
         root.Controls.Add(tabs,0,0);
         var path=new TextBox {Text=AppLauncher.ConfigPath,ReadOnly=true,Dock=DockStyle.Fill,BorderStyle=BorderStyle.None,BackColor=BackColor};root.Controls.Add(path,0,1);
         var buttons=new FlowLayoutPanel {Dock=DockStyle.Fill,FlowDirection=FlowDirection.RightToLeft};
-        var save=new Button {Text="Save settings",Width=130,Height=30,FlatStyle=FlatStyle.Flat,BackColor=Color.FromArgb(14,105,86),ForeColor=Color.White};save.Click+=delegate {
+        var save=new Button {Text="Save and apply",Width=140,Height=30,FlatStyle=FlatStyle.Flat,BackColor=Color.FromArgb(14,105,86),ForeColor=Color.White};save.Click+=delegate {
             try {
                 var updated=new PowerConfig {version=1,modes=new [] {editors[0].Read(),editors[1].Read(),editors[2].Read()}};
                 PowerConfig.Save(AppLauncher.ConfigPath,updated);DialogResult=DialogResult.OK;Close();

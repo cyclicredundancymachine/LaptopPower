@@ -19,7 +19,10 @@ internal sealed class PowerWindow : Form {
     readonly Label summary;
     readonly Label heading;
     readonly Label liveGpu;
-    readonly Button turnGpuOn;
+    readonly Button toggleGpu;
+    bool gpuIsOn;
+    readonly Button toggleChargeLimit;
+    readonly Label chargeLimitStatus;
     readonly DataGridView results;
     readonly TextBox detail;
     PowerConfig config;
@@ -38,9 +41,14 @@ internal sealed class PowerWindow : Form {
             default: return 0;
         }
     }
-    internal Task ApplyMode(int mode) { return Execute("-Action Apply -ModeIndex "+mode); }
+    internal Task ApplyMode(int mode) {
+        if (IsBusy) return Task.FromResult(0);
+        return Execute("-Action Apply -ModeIndex " + mode);
+    }
+    internal bool ChargeLimitAvailable { get; private set; }
+    internal bool ChargeLimitBusy { get; private set; }
+    internal int RequestedChargeLimit { get; private set; }
     bool exiting;
-    int lastMode=-1;
     public PowerWindow() {
         Text="Laptop Power";ClientSize=new Size(950,800);MinimumSize=new Size(790,720);
         StartPosition=FormStartPosition.CenterScreen;BackColor=Color.FromArgb(241,246,250);ForeColor=Color.FromArgb(23,42,58);
@@ -57,37 +65,58 @@ internal sealed class PowerWindow : Form {
         var gpuControls = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, Margin = Padding.Empty };
         gpuControls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         gpuControls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        turnGpuOn = ActionButton("Turn NVIDIA on", 155);
-        turnGpuOn.Enabled = false;
-        turnGpuOn.Click += async delegate {
+        toggleGpu = ActionButton("Turn NVIDIA on", 155);
+        toggleGpu.Enabled = false;
+        toggleGpu.Click += async delegate {
             if (PowerMonitor == null || IsBusy) return;
-            string result = await PowerMonitor.OverrideGpu(true);
+            string result = await PowerMonitor.OverrideGpu(!gpuIsOn);
             if (result != null) summary.Text = result;
         };
         gpuControls.Controls.Add(liveGpu, 0, 0);
-        gpuControls.Controls.Add(turnGpuOn, 1, 0);
+        gpuControls.Controls.Add(toggleGpu, 1, 0);
         root.Controls.Add(gpuControls,0,1);
+        root.RowStyles[8].Height = 44;
+        var chargeControls = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, WrapContents = false };
+        toggleChargeLimit = ActionButton("Enable 80% limit", 165);
+        chargeLimitStatus = new Label { Text = "Checking ASUS charge control…", AutoSize = true, Margin = new Padding(5, 10, 0, 0) };
+        toggleChargeLimit.Click += async delegate { await SetChargeLimit(RequestedChargeLimit == 80 ? 100 : 80); };
+        toggleChargeLimit.Enabled = false;
+        chargeControls.Controls.Add(toggleChargeLimit);
+        chargeControls.Controls.Add(chargeLimitStatus);
+        root.Controls.Add(chargeControls, 0, 8);
         var cards=new TableLayoutPanel {Dock=DockStyle.Fill,ColumnCount=3,RowCount=2,Margin=new Padding(0)};
         cards.RowStyles.Add(new RowStyle(SizeType.Absolute,48));cards.RowStyles.Add(new RowStyle(SizeType.Percent,100));
         Color[] colors={Color.FromArgb(13,106,83),Color.FromArgb(31,78,132),Color.FromArgb(123,60,34)};
         for(int i=0;i<3;i++) {
             int selected=i;cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,33.333f));
             var button=new Button {Dock=DockStyle.Fill,BackColor=colors[i],ForeColor=Color.White,FlatStyle=FlatStyle.Flat,Font=new Font("Segoe UI",11,FontStyle.Bold),Margin=new Padding(3,2,3,2)};
-            button.FlatAppearance.BorderSize=0;button.Click+=async delegate {lastMode=selected;await Execute("-Action Apply -ModeIndex "+selected);};
+            button.FlatAppearance.BorderSize=0;button.Click+=async delegate {await ApplyMode(selected);};
             modes[i]=button;cards.Controls.Add(button,i,0);
             descriptions[i]=new Label {Dock=DockStyle.Fill,Font=new Font("Segoe UI",9),BackColor=Color.White,Padding=new Padding(10,6,5,0),Margin=new Padding(3,0,3,8)};cards.Controls.Add(descriptions[i],i,1);
         }
         root.Controls.Add(cards,0,2);
         var actions=new FlowLayoutPanel {Dock=DockStyle.Fill,Margin=new Padding(0),WrapContents=false};
         settings=ActionButton("Mode settings...",160);verify=ActionButton("Verify & fix",205);restore=ActionButton("Restore saved settings",195);
-        settings.Click+=delegate {
+        settings.Click+=async delegate {
+            bool saved=false;
             editing=true;
             try {
                 using(var editor=new SettingsWindow(PowerConfig.Load(AppLauncher.ConfigPath))) {
-                    if(editor.ShowDialog(this)==DialogResult.OK){ReloadConfig();summary.Text="Configuration saved. Select a mode to apply it. Any results below are from the previous check.";}
+                    saved=editor.ShowDialog(this)==DialogResult.OK;
                 }
             }catch(Exception e){MessageBox.Show(this,e.Message,"Settings",MessageBoxButtons.OK,MessageBoxIcon.Error);}
             finally {editing=false;}
+            if(!saved)return;
+            ReloadConfig();
+            string activeName;
+            int active=PowerMonitor==null?-1:PowerMonitor.ActiveMode(out activeName);
+            if(active>=0)await ApplyMode(active);
+            else {
+                results.Rows.Clear();
+                detail.Text="Select a Laptop Power mode to apply the saved settings.";
+                summary.Text="Configuration saved. Select a mode to apply it.";
+                UpdateGpuRows();
+            }
         };
         verify.Click+=async delegate {
             if(PowerMonitor==null)return;
@@ -96,7 +125,7 @@ internal sealed class PowerWindow : Form {
             if(target<0){summary.Text="Select Endurance, Balanced, or Boost before using Verify & fix.";return;}
             await Execute("-Action Verify -ModeIndex "+target,true);
         };
-        restore.Click+=async delegate {lastMode=-1;await Execute("-Action Restore");};
+        restore.Click+=async delegate {await Execute("-Action Restore");};
         var help=ActionButton("Help",70);
         help.Click+=delegate {AppLauncher.OpenReadme();};
         actions.Controls.Add(settings);actions.Controls.Add(verify);actions.Controls.Add(restore);actions.Controls.Add(help);root.Controls.Add(actions,0,3);
@@ -127,6 +156,42 @@ internal sealed class PowerWindow : Form {
         };
         Shown+=delegate {AppLauncher.Log("Version 3 window shown.");Activate();};
     }
+    internal async Task CheckChargeLimit() {
+        try {
+            ChargeLimitAvailable = await Task.Run(() => {
+                using (var asus = new LaptopAsus()) return asus.CanSetChargeLimit();
+            });
+        } catch (Exception ex) { AppLauncher.Log("Charge limit probe: " + ex.Message); }
+        if (IsDisposed) return;
+        toggleChargeLimit.Enabled = ChargeLimitAvailable;
+        chargeLimitStatus.Text = ChargeLimitAvailable ? "Current charge limit unavailable to read" : "ASUS charge control unavailable";
+    }
+
+    internal async Task<bool> SetChargeLimit(int percent) {
+        if (!ChargeLimitAvailable || ChargeLimitBusy) return false;
+        ChargeLimitBusy = true;
+        toggleChargeLimit.Enabled = false;
+        chargeLimitStatus.Text = "Applying " + percent + "%…";
+        try {
+            await Task.Run(() => {
+                using (var asus = new LaptopAsus()) asus.SetChargeLimit(percent);
+            });
+            RequestedChargeLimit = percent;
+            chargeLimitStatus.Text = "ASUS accepted " + percent + "%";
+            AppLauncher.Log(chargeLimitStatus.Text + " charge limit; threshold readback unavailable.");
+            return true;
+        } catch (Exception ex) {
+            RequestedChargeLimit = 0;
+            chargeLimitStatus.Text = "Charge limit could not be set";
+            summary.Text = ex.Message;
+            AppLauncher.Log("Charge limit request: " + ex.Message);
+            return false;
+        } finally {
+            ChargeLimitBusy = false;
+            toggleChargeLimit.Text = RequestedChargeLimit == 80 ? "Disable 80% limit" : "Enable 80% limit";
+            toggleChargeLimit.Enabled = ChargeLimitAvailable;
+        }
+    }
     internal void UpdateActiveMode(string mode) {
         string title="Laptop Power - "+mode;
         if(Text!=title){Text=title;heading.Text=title;}
@@ -137,29 +202,33 @@ internal sealed class PowerWindow : Form {
         string label="NVIDIA GPU right now: "+value;
         if(!switching && failure!=null && state!="On" && state!="Off")label+=" - check results below";
         liveGpu.Text=label;
-        turnGpuOn.Enabled = !switching && !IsBusy && state != "On" && state != "Unavailable";
+        gpuIsOn = state == "On";
+        toggleGpu.Text = switching ? "Switching NVIDIA…" : gpuIsOn ? "Turn NVIDIA off" : "Turn NVIDIA on";
+        toggleGpu.Enabled = !switching && !IsBusy && state != "Unavailable";
         liveGpu.ForeColor=switching?Color.FromArgb(145,91,0):state=="On"?Color.FromArgb(31,78,132):
             state=="Off"?Color.FromArgb(13,106,83):Color.FromArgb(175,35,35);
     }
 
     internal void UpdateGpuRows() {
-        if(PowerMonitor==null || results.Rows.Count==0)return;
-        var rows=PowerMonitor.GpuRows(lastMode);
-        foreach(var item in rows) {
-            DataGridViewRow existing=null;
-            foreach(DataGridViewRow row in results.Rows) {
-                if((string)row.Cells["setting"].Value==item.setting){existing=row;break;}
-            }
-            if(existing==null){results.Rows.Insert(0,item.setting,item.requested,item.actual,item.status);existing=results.Rows[0];}
+        if(PowerMonitor==null)return;
+        var item=PowerMonitor.CurrentGpuRow();
+        var existing=results.Rows.Cast<DataGridViewRow>().FirstOrDefault(row => IsGpuRow(row.Tag as SettingResult));
+        if(existing==null){results.Rows.Insert(0,item.setting,item.requested,item.actual,item.status);existing=results.Rows[0];}
+            existing.Cells["setting"].Value=item.setting;
             existing.Cells["requested"].Value=item.requested;
             existing.Cells["actual"].Value=item.actual;
             existing.Cells["status"].Value=item.status;
             existing.Tag=item;
             foreach(DataGridViewCell cell in existing.Cells)cell.ToolTipText=item.detail;
-            existing.Cells["status"].Style.ForeColor=item.status=="Verified"?Color.FromArgb(0,105,60):
-                item.status=="Failed" || item.status=="Mismatch"?Color.FromArgb(175,35,35):Color.FromArgb(145,91,0);
+            bool unknown=item.status=="Source unknown";
+            existing.DefaultCellStyle.ForeColor=unknown?Color.DarkRed:Color.Empty;
+            existing.DefaultCellStyle.SelectionForeColor=unknown?Color.DarkRed:Color.Empty;
+            existing.Cells["status"].Style.ForeColor=unknown?Color.DarkRed:item.status=="Verified"?Color.FromArgb(0,105,60):
+                item.status=="Failed" || item.status=="Mismatch"?Color.FromArgb(175,35,35):Color.FromArgb(70,85,105);
             if(existing.Selected)detail.Text=item.setting+": "+item.status+Environment.NewLine+item.detail;
-        }
+    }
+    static bool IsGpuRow(SettingResult row) {
+        return row != null && row.setting != null && row.setting.StartsWith("NVIDIA GPU",StringComparison.Ordinal);
     }
     internal void BringForward() {
         if(!Visible)Show();
@@ -173,7 +242,7 @@ internal sealed class PowerWindow : Form {
         foreach(Form owned in OwnedForms)if(owned.Visible)owned.Activate();
     }
     internal void ExitFromTray() {
-        if(busy || editing){BringForward();summary.Text="Finish the current settings operation before exiting.";return;}
+        if(IsBusy || ChargeLimitBusy){BringForward();summary.Text="Finish the current settings operation before exiting.";return;}
         exiting=true;
         try {Close();} finally {exiting=false;}
     }
@@ -215,10 +284,11 @@ internal sealed class PowerWindow : Form {
     void ShowReport(OperationReport report) {
         if(report==null || report.rows==null)throw new InvalidDataException("The settings service returned an empty report.");
         report.rows=report.rows.Where(row=>row.setting!="Keyboard brightness" && row.setting!="ASUS thermal preset").OrderBy(ResultPriority).ToArray();
-        lastMode=report.targetModeIndex;
+        // Older saved reports contain one NVIDIA row per source. The live row replaces them.
+        var visibleRows = report.rows.Where(row => !IsGpuRow(row));
         summary.Text=report.mode+" | "+report.time+Environment.NewLine+String.Join(", ",report.rows.GroupBy(row=>row.status).Select(group=>group.Count()+" "+group.Key.ToLowerInvariant()));
         results.Rows.Clear();
-        foreach(var item in report.rows) {
+        foreach(var item in visibleRows) {
             int index=results.Rows.Add(item.setting,item.requested,item.actual,item.status);var row=results.Rows[index];row.Tag=item;
             foreach(DataGridViewCell cell in row.Cells)cell.ToolTipText=item.detail;
             var status=row.Cells["status"];
@@ -246,7 +316,9 @@ internal sealed class PowerWindow : Form {
             }
             if(PowerMonitor!=null && report.targetModeIndex>=0) {
                 await PowerMonitor.VerifyGpu(report.targetModeIndex,repair || command.Contains("-Action Apply"));
-                report.rows=report.rows.Concat(PowerMonitor.GpuRows(report.targetModeIndex)).ToArray();
+            }
+            if(PowerMonitor!=null) {
+                report.rows=report.rows.Concat(new[]{PowerMonitor.CurrentGpuRow()}).ToArray();
             }
             report.summary=(repair?"Verify & fix results. ":"Results. ")+String.Join(", ",report.rows.GroupBy(row=>row.status).Select(group=>group.Count()+" "+group.Key.ToLowerInvariant()));
             File.WriteAllText(Path.Combine(AppLauncher.Folder,"last-report.json"),new JavaScriptSerializer().Serialize(report));

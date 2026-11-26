@@ -11,3 +11,6 @@
 /gpu-*-result.txt
 /gpu-cycle-*.txt
 /startup-*.txt
+/dist/
+/artifacts/
+/evidence/

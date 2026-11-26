@@ -6,6 +6,17 @@ using Microsoft.Win32.SafeHandles;
 // Narrow access to the ASUS System Control Interface. No voltage or fan curve writes.
 public sealed class LaptopAsus : IDisposable {
     internal const uint GpuEco = 0x00090020;
+    const uint ChargeLimit = 0x00120057;
+    // G614PW reports a status word with no readable threshold for this control.
+    internal bool CanSetChargeLimit() {
+        return Call(0x53545344, ChargeLimit, 0) == 0x01890000;
+    }
+    internal void SetChargeLimit(int percent) {
+        if (percent != 80 && percent != 100) throw new ArgumentOutOfRangeException("percent");
+        if (!CanSetChargeLimit()) throw new NotSupportedException("ASUS charge limit is unavailable.");
+        int result = Call(0x53564544, ChargeLimit, percent);
+        if (result != 1) throw new InvalidOperationException("ASUS rejected the charge limit (response " + result + ").");
+    }
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
     static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
     [DllImport("kernel32.dll", SetLastError=true)]
